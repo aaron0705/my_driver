@@ -19,7 +19,9 @@
 #include <stdint.h>
 #include "gpio.h"
 #include "rcc.h"
-#include "I2C.h"
+#include "uart.h"
+#include "adc.h"
+#include "spi.h"
 #include "reset_function.h"
 #include "iperipheral.h"
 #include <string.h>
@@ -42,16 +44,95 @@ void enable_clock()
     *RCC_CFGR |= APB1_CLK_NOT_DIVIDE;
     *RCC_CFGR |= APB2_CLK_NOT_DIVIDE;
 
-    *RCC_APB2ENR |= PORTB_EN | AFIO_EN;
-    *RCC_APB1ENR |= I2C_EN;
+    *RCC_APB2ENR |= PORTA_EN | AFIO_EN | UART1_EN;
+}
+
+void pin_initialize()
+{
+	// PA5 CLK
+	*GPIOA_CRL |= (GPIO_CNF_OUTPUT_AF_PP << CNF5) | (GPIO_MODE_OUTPUT_10MHZ << MODE5);
+	// PA7 MOSI
+	*GPIOA_CRL |= (GPIO_CNF_OUTPUT_AF_PP << CNF7) | (GPIO_MODE_OUTPUT_10MHZ << MODE7);
+	// PA11 D/C
+	*GPIOA_CRH |= (GPIO_CNF_OUTPUT_PP << CNF11) | (GPIO_MODE_OUTPUT_10MHZ << MODE11);
+	// PA4 CS
+	*GPIOA_CRL |= (GPIO_CNF_OUTPUT_PP  << CNF4) | (GPIO_MODE_OUTPUT_10MHZ << MODE4);
+	// PA12 RST
+	*GPIOA_CRH |= (GPIO_CNF_OUTPUT_PP  << CNF12) | (GPIO_MODE_OUTPUT_10MHZ << MODE12);
+	// PA13 VCC
+	*GPIOA_CRH |= (GPIO_CNF_OUTPUT_PP  << CNF13) | (GPIO_MODE_OUTPUT_10MHZ << MODE13);
+}
+
+void LCD_5110_Transmit(uint8_t data, uint8_t is_data)
+{
+	if (is_data)
+	{
+		*GPIOA_ODR |= GPIO11_EN;
+	}
+	else
+	{
+		*GPIOA_ODR &= ~GPIO11_EN;
+	}
+	spi_transmit(data);
+}
+
+void LCD_5110_init()
+{
+	*GPIOA_ODR |= GPIO13_EN;
+	*GPIOA_ODR &= ~GPIO12_EN;
+	delay_ms(100);
+	*GPIOA_ODR |= GPIO12_EN;
+	// function set
+	LCD_5110_Transmit(0b00100001, 0);
+	delay_us(1);
+	//set vop
+	LCD_5110_Transmit(0b10010000, 0);
+	delay_us(1);
+	// function set
+	LCD_5110_Transmit(0b10010000, 0);
+	delay_us(1);
+	//display control
+	LCD_5110_Transmit(0b00001100, 0);
+	delay_us(1);
+}
+
+void lcd_transmit(uint8_t* data, uint8_t length)
+{
+	for (int i = 0; i < length; i++)
+	{
+
+	}
+}
+
+void server_transmit(uint8_t* data)
+{
+	uint8_t size = strlen(data);
+	for (int i = 0; i < size; i++)
+	{
+		uart_transmit(data[i]);
+		if (i == (size - 1))
+		{
+			while (!TC);
+		}
+	}
+}
+
+void sys_start()
+{
+	uart_start_transmit();
+	ADC_Start();
 }
 
 void initialize()
 {
-	// PB6 CLK
-	*GPIOB_CRL |= (GPIO_CNF_OUTPUT_AF_OD << CNF6) | (GPIO_MODE_OUTPUT_10MHZ << MODE6);
-	// P MOSI
-	*GPIOB_CRL |= (GPIO_CNF_OUTPUT_AF_OD << CNF7) | (GPIO_MODE_OUTPUT_10MHZ << MODE7);
+	// tx pa9 rx pa10
+	*GPIOA_CRH |= GPIO_CNF_OUTPUT_PP<<CNF9 | GPIO_MODE_OUTPUT_10MHZ <<MODE9;
+	*GPIOA_CRH |= GPIO_CNF_INPUT_FLOATING<<CNF10 | GPIO_MODE_INPUT<<MODE10;
+	pin_initialize();
+	uart_init(115200, eight_data_bits, 1);
+	ADC_init();
+	spi_init('M', fPCLKDVD2, 0);
+	LCD_5110_init();
 }
 
 int main(void)
@@ -60,13 +141,17 @@ int main(void)
 	reset_sys();
 	enable_clock();
 	initialize();
-	*I2C_CR1 |= Stop_Bit;
-	I2C_Init(FERQ_8MHZ, 'M', Standa_Mode);
+	sys_start();
 	while (1)
 	{
-		uint8_t msg[] = "Hello world!";
-		int size = sizeof(msg)/sizeof(msg[0]);
-		I2C_Transmit_LCD(0x27<<1, msg, size);
+		uint8_t adc_data[8];
+		for (int i = 0; i < strlen(adc_data); i++)
+		{
+			adc_data[i] = 0;
+		}
+		ADC_Read_8Channels(adc_data);
+		server_transmit(adc_data);
+		lcd_transmit(adc_data, strlen(adc_data));
 		delay_ms(500);
 	}
 }
